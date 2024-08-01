@@ -4,25 +4,18 @@
  * The original code can be found at https://github.com/di-sukharev/opencommit/blob/master/src/generateCommitMessageFromGitDiff.ts.
  */
 
-import {
-  ChatCompletionRequestMessage,
-  ChatCompletionRequestMessageRoleEnum,
-  Configuration,
-  OpenAIApi,
-} from "openai";
-
+import axios from 'axios';
 import { trimNewLines } from "@utils/text";
 import { Configuration as AppConfiguration } from "@utils/configuration";
-
 import { MsgGenerator } from "./msg-generator";
 
-const initMessagesPrompt: Array<ChatCompletionRequestMessage> = [
+const initMessagesPrompt: Array<any> = [
   {
-    role: ChatCompletionRequestMessageRoleEnum.System,
-    content: `You are to act as the author of a commit message in git. Your mission is to create clean and comprehensive commit messages in the conventional commit convention. I'll send you an output of 'git diff --staged' command, and you convert it into a commit message. Do not preface the commit with anything, use the present tense. Don't add any descriptions to the commit, only commit message. Use english language to answer.`,
+    role: "system",
+    content: `You are to act as the author of a commit message in git. Your mission is to create clean and comprehensive commit messages in the conventional commit convention. I'll send you an output of 'git diff --staged' command, and you convert it into a commit message. Do not preface the commit with anything, use the present tense. Don't add any descriptions to the commit, only commit message. Use English language to answer.`,
   },
   {
-    role: ChatCompletionRequestMessageRoleEnum.User,
+    role: "user",
     content: `diff --git a/src/server.ts b/src/server.ts
     index ad4db42..f3b18a9 100644
     --- a/src/server.ts
@@ -47,60 +40,62 @@ const initMessagesPrompt: Array<ChatCompletionRequestMessage> = [
       });`,
   },
   {
-    role: ChatCompletionRequestMessageRoleEnum.Assistant,
+    role: "assistant",
     content: `fix(server.ts): change port variable case from lowercase port to uppercase PORT
         feat(server.ts): add support for process.env.PORT environment variable`,
   },
 ];
 
-function generateCommitMessageChatCompletionPrompt(
-  diff: string
-): Array<ChatCompletionRequestMessage> {
+function generateCommitMessageChatCompletionPrompt(diff: string): Array<any> {
   const chatContextAsCompletionRequest = [...initMessagesPrompt];
 
   chatContextAsCompletionRequest.push({
-    role: ChatCompletionRequestMessageRoleEnum.User,
+    role: "user",
     content: diff,
   });
 
   return chatContextAsCompletionRequest;
 }
 
-const defaultModel = "gpt-3.5-turbo-16k";
-const defaultTemperature = 0.2;
-const defaultMaxTokens = 196;
+const defaultModel = "gemini-pro";
+const apiKey = config.apiKey; // Replace this with your actual API key
+const apiUrl = `https://generativelanguage.googleapis.com/v1/models/${defaultModel}:generateContent?key=${apiKey}`;
 
 export class ChatgptMsgGenerator implements MsgGenerator {
-  openAI: OpenAIApi;
   config?: AppConfiguration["openAI"];
 
   constructor(config: AppConfiguration["openAI"]) {
-    this.openAI = new OpenAIApi(
-      new Configuration({
-        apiKey: config.apiKey,
-      }),
-      config.customEndpoint?.trim() || undefined
-    );
     this.config = config;
   }
 
   async generate(diff: string, delimeter?: string) {
     const messages = generateCommitMessageChatCompletionPrompt(diff);
-    const { data } = await this.openAI.createChatCompletion({
-      model: this.config?.gptVersion || defaultModel,
-      messages: messages,
-      temperature: this.config?.temperature || defaultTemperature,
-      ["max_tokens"]: this.config?.maxTokens || defaultMaxTokens,
-    });
 
-    const message = data?.choices[0].message;
-    const commitMessage = message?.content;
+    try {
+      const response = await axios.post(
+        apiUrl,
+        {
+          contents: messages,
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        }
+      );
 
-    if (!commitMessage) {
-      throw new Error("No commit message were generated. Try again.");
+      const message = response.data.choices[0].message;
+      const commitMessage = message?.content;
+
+      if (!commitMessage) {
+        throw new Error("No commit message was generated. Try again.");
+      }
+
+      const alignedCommitMessage = trimNewLines(commitMessage, delimeter);
+      return alignedCommitMessage;
+    } catch (error) {
+      console.error("Error generating commit message:", error);
+      throw new Error("Failed to generate commit message.");
     }
-
-    const alignedCommitMessage = trimNewLines(commitMessage, delimeter);
-    return alignedCommitMessage;
   }
 }
